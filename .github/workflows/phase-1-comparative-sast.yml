@@ -1,0 +1,290 @@
+name: Phase 1 comparative SAST proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Validate corpus and tooling
+        run: npm run validate
+
+  sonar:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Verify exact commit and corpus
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          corpus_hash="$(node scripts/corpus-manifest.mjs --check --print-hash)"
+          echo "corpus_hash=$corpus_hash" >> "$GITHUB_OUTPUT"
+          {
+            echo "### SonarQube Cloud OSS input"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Corpus SHA-256: \`$corpus_hash\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require explicit Sonar configuration
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "$SONAR_TOKEN" ]] || missing+=(SONAR_TOKEN)
+          [[ -n "$SONAR_ORGANIZATION" ]] || missing+=(SONAR_ORGANIZATION)
+          [[ -n "$SONAR_PROJECT_KEY" ]] || missing+=(SONAR_PROJECT_KEY)
+          [[ "$SONAR_HOST_URL" == https://* ]] || missing+=(SONAR_HOST_URL)
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing required Sonar repository secret/variables: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Run official Sonar scanner
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        run: |
+          set -euo pipefail
+          scanner_log="$RUNNER_TEMP/sonar-scanner.log"
+          metadata="$RUNNER_TEMP/sonar-report-task.txt"
+          scanner_version="$(node -p "require('./node_modules/@sonar/scan/package.json').version")"
+          test "$scanner_version" = "5.0.0"
+
+          set +e
+          ./node_modules/.bin/sonar-scanner-npm \
+            "-Dsonar.host.url=$SONAR_HOST_URL" \
+            "-Dsonar.organization=$SONAR_ORGANIZATION" \
+            "-Dsonar.projectKey=$SONAR_PROJECT_KEY" \
+            "-Dsonar.projectVersion=$GITHUB_SHA" \
+            "-Dsonar.scm.revision=$GITHUB_SHA" \
+            "-Dsonar.working.directory=$RUNNER_TEMP/sonar-working" \
+            "-Dsonar.scanner.metadataFilePath=$metadata" \
+            >"$scanner_log" 2>&1
+          status=$?
+          set -e
+
+          if [[ "$status" -ne 0 ]] || [[ ! -s "$metadata" ]]; then
+            rm -f "$scanner_log" "$metadata"
+            echo "Sonar scanner submission failed; raw output was suppressed and removed." >&2
+            exit 1
+          fi
+          rm -f "$scanner_log"
+
+      - name: Retrieve and normalize Sonar evidence
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_SCANNER_VERSION: "5.0.0"
+          SCANNED_COMMIT: ${{ github.sha }}
+          CORPUS_MANIFEST_SHA256: ${{ steps.evidence.outputs.corpus_hash }}
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/sonar-report-task.txt"
+          ce_task_id="$(sed -n 's/^ceTaskId=//p' "$metadata")"
+          test -n "$ce_task_id"
+          ce_json="$RUNNER_TEMP/sonar-ce-task.json"
+          curl_error="$RUNNER_TEMP/sonar-api.stderr"
+          analysis_id=""
+
+          for _ in $(seq 1 60); do
+            if ! curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --header "Authorization: Bearer $SONAR_TOKEN" \
+              --get --data-urlencode "id=$ce_task_id" \
+              --output "$ce_json" \
+              "$SONAR_HOST_URL/api/ce/task" 2>"$curl_error"; then
+              rm -f "$curl_error"
+              echo "Sonar compute-task API request failed; raw response was suppressed." >&2
+              exit 1
+            fi
+            task_status="$(jq -r '.task.status' "$ce_json")"
+            if [[ "$task_status" == "SUCCESS" ]]; then
+              analysis_id="$(jq -r '.task.analysisId' "$ce_json")"
+              break
+            fi
+            if [[ "$task_status" == "FAILED" || "$task_status" == "CANCELED" ]]; then
+              rm -f "$ce_json" "$curl_error"
+              echo "Sonar analysis did not complete successfully: $task_status" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          test -n "$analysis_id"
+
+          issues_json="$RUNNER_TEMP/sonar-issues.json"
+          hotspots_search="$RUNNER_TEMP/sonar-hotspots-search.json"
+          hotspot_dir="$RUNNER_TEMP/sonar-hotspots"
+          normalized="$RUNNER_TEMP/sonar-normalized.json"
+          mkdir -p "$hotspot_dir"
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            --header "Authorization: Bearer $SONAR_TOKEN" \
+            --get --data-urlencode "componentKeys=$SONAR_PROJECT_KEY" \
+            --data-urlencode "ps=500" \
+            --output "$issues_json" \
+            "$SONAR_HOST_URL/api/issues/search" 2>"$curl_error"
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            --header "Authorization: Bearer $SONAR_TOKEN" \
+            --get --data-urlencode "projectKey=$SONAR_PROJECT_KEY" \
+            --data-urlencode "ps=500" \
+            --output "$hotspots_search" \
+            "$SONAR_HOST_URL/api/hotspots/search" 2>"$curl_error"
+
+          index=0
+          while IFS= read -r hotspot_key; do
+            [[ -n "$hotspot_key" ]] || continue
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --header "Authorization: Bearer $SONAR_TOKEN" \
+              --get --data-urlencode "hotspot=$hotspot_key" \
+              --output "$hotspot_dir/$index.json" \
+              "$SONAR_HOST_URL/api/hotspots/show" 2>"$curl_error"
+            index=$((index + 1))
+          done < <(jq -r '.hotspots[]?.key' "$hotspots_search")
+
+          export SONAR_ANALYSIS_ID="$analysis_id"
+          node scripts/normalize-sonar.mjs "$issues_json" "$hotspot_dir" "$normalized"
+          jq . "$normalized"
+          rm -rf "$metadata" "$ce_json" "$issues_json" "$hotspots_search" "$hotspot_dir" \
+            "$normalized" "$curl_error"
+
+  snyk:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Install verified official Snyk CLI
+        shell: bash
+        env:
+          SNYK_CLI_VERSION: "1.1306.4"
+          SNYK_CLI_SHA256: "78a83f57a16cb660879cb29f75fcb4a6c1ba07791dceb41e2b840fb89741c95c"
+        run: |
+          set -euo pipefail
+          snyk_bin="$RUNNER_TEMP/snyk-linux"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "$snyk_bin" \
+            "https://downloads.snyk.io/cli/v${SNYK_CLI_VERSION}/snyk-linux"
+          echo "${SNYK_CLI_SHA256}  ${snyk_bin}" | sha256sum --check --strict
+          chmod +x "$snyk_bin"
+          test "$("$snyk_bin" --version)" = "$SNYK_CLI_VERSION"
+          echo "SNYK_BIN=$snyk_bin" >> "$GITHUB_ENV"
+
+      - name: Verify exact commit and corpus
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          corpus_hash="$(node scripts/corpus-manifest.mjs --check --print-hash)"
+          echo "corpus_hash=$corpus_hash" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Snyk Code Free input"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Corpus SHA-256: \`$corpus_hash\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require Snyk token
+        shell: bash
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SNYK_TOKEN" ]]; then
+            echo "Missing required repository secret: SNYK_TOKEN" >&2
+            exit 1
+          fi
+
+      - name: Run Snyk Code and normalize evidence
+        shell: bash
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_CLI_VERSION: "1.1306.4"
+          SCANNED_COMMIT: ${{ github.sha }}
+          CORPUS_MANIFEST_SHA256: ${{ steps.evidence.outputs.corpus_hash }}
+        run: |
+          set -euo pipefail
+          raw_json="$RUNNER_TEMP/snyk-code.json"
+          raw_stderr="$RUNNER_TEMP/snyk-code.stderr"
+          normalized="$RUNNER_TEMP/snyk-normalized.json"
+          installed_version="$("$SNYK_BIN" --version)"
+          test "$installed_version" = "$SNYK_CLI_VERSION"
+
+          set +e
+          "$SNYK_BIN" code test . --json >"$raw_json" 2>"$raw_stderr"
+          status=$?
+          set -e
+
+          if [[ "$status" -ne 0 && "$status" -ne 1 ]]; then
+            rm -f "$raw_json" "$raw_stderr"
+            echo "Snyk Code infrastructure failure (exit $status); raw output was suppressed." >&2
+            exit "$status"
+          fi
+          jq -e . "$raw_json" >/dev/null
+          node scripts/normalize-snyk.mjs "$raw_json" "$normalized"
+          jq . "$normalized"
+          rm -f "$raw_json" "$raw_stderr" "$normalized"

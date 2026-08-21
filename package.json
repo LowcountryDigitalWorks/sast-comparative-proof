@@ -1,0 +1,28 @@
+{
+  "name": "ldw-sast-comparative-proof",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Synthetic-only Hono and Cloudflare D1 comparative SAST proof corpus.",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "format:check": "prettier --check .",
+    "manifest:check": "node scripts/corpus-manifest.mjs --check",
+    "manifest:write": "node scripts/corpus-manifest.mjs --write",
+    "proofs:check": "node scripts/verify-corpus.mjs",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "validate": "npm run format:check && npm run typecheck && npm run build && npm run manifest:check && npm run proofs:check"
+  },
+  "dependencies": {
+    "hono": "4.13.1"
+  },
+  "devDependencies": {
+    "@sonar/scan": "5.0.0",
+    "@types/node": "24.13.3",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3"
+  }
+}
