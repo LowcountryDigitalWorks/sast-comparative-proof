@@ -1,0 +1,70 @@
+{
+  "algorithm": "sha256",
+  "corpusSha256": "5075a0c3ed24a959fd6dbab5c4003022d335222a5719e65b5c153022dbe5a6f4",
+  "files": [
+    {
+      "path": "src/corpus/d1-types.ts",
+      "sha256": "6e867f8a2268566d6c9fb5e02950e6202bc98e3f1080a6fabef293ea59a60de7"
+    },
+    {
+      "path": "src/corpus/hono/N1_HONO_XSS_SAFE.ts",
+      "sha256": "3d70ffe837ba5896692cbf7571569bf7e1e6adb2436fae05c2d19f1021fc1c01"
+    },
+    {
+      "path": "src/corpus/hono/N2_HONO_REDIRECT_SAFE.ts",
+      "sha256": "2f2b45519b1b7fb47ed5744c8fb629aaf8955ae815e9cf9ba7125f44677f9fad"
+    },
+    {
+      "path": "src/corpus/hono/N3_HONO_PATH_SAFE.ts",
+      "sha256": "0767748ab6b70ecb651552f3c9012a330e90a6299f991ded41452ab7ac5e68ef"
+    },
+    {
+      "path": "src/corpus/hono/N4_HONO_D1_SQL_SAFE.ts",
+      "sha256": "33ef584f8e26b27f79e67fe0004c69a96945cd2ddf7651cdb1aed1338559d5a9"
+    },
+    {
+      "path": "src/corpus/hono/V1_HONO_XSS.ts",
+      "sha256": "a2f658eb2781bce1c0f60ae433a29959d9f91d6578dc22192e242844fb114941"
+    },
+    {
+      "path": "src/corpus/hono/V2_HONO_REDIRECT.ts",
+      "sha256": "9311d82f833a28d7848e5e92da03263171fb2d90dd840e560a8b8c4c5ba75e46"
+    },
+    {
+      "path": "src/corpus/hono/V3_HONO_PATH.ts",
+      "sha256": "c8c8107e10bc7ae3b4f022ee00877c6c8024c844fa25517370661eae308ca502"
+    },
+    {
+      "path": "src/corpus/hono/V4_HONO_D1_SQL.ts",
+      "sha256": "84990b4d764ae1eefe8c354dbe7669311dc237e0f6a8efb8df2e855258e60006"
+    },
+    {
+      "path": "src/corpus/node/N5_NODE_XSS_SAFE.ts",
+      "sha256": "79f1acbad878435c102ea5390c300e17be380f3e6f639d9f74be8fa9e3f572e4"
+    },
+    {
+      "path": "src/corpus/node/N6_NODE_REDIRECT_SAFE.ts",
+      "sha256": "f9f0f780901cda39459c65c8de9365669b50aae84bf0bcd89e0a6307873c2d66"
+    },
+    {
+      "path": "src/corpus/node/N7_NODE_PATH_SAFE.ts",
+      "sha256": "6479ef93a4ad80de8c4423539cd1c4da4a042f8df501430ee0215c9175a49547"
+    },
+    {
+      "path": "src/corpus/node/P1_NODE_XSS.ts",
+      "sha256": "13d057396d8e3c996bb56299511bff27678f954411c663230a6aaeb8e68a9628"
+    },
+    {
+      "path": "src/corpus/node/P2_NODE_REDIRECT.ts",
+      "sha256": "2511cb6d7dbe4eb8452dedd6b142cd6595551db2895b2bcaee8ad6dbb1cbbac7"
+    },
+    {
+      "path": "src/corpus/node/P3_NODE_PATH.ts",
+      "sha256": "500ea078a4940de5a9f3db3c1d3d004433a1d0678b54aef179c723bc70cdd59b"
+    },
+    {
+      "path": "src/corpus/shared/escape-html.ts",
+      "sha256": "2089674dc68262704e2daea3488e34b4c173999911a22e788f07263884f8c4df"
+    }
+  ]
+}
